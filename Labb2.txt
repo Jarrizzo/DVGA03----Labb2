@@ -1,0 +1,206 @@
+		.eqv IntTime 0x0400  				#mask for timer interupt
+		.eqv IntButton 0x0800 				#mask for button interrupt, bit 11
+		.eqv Clear 0xFFFFF3FF 				#mask for clearing time and button
+		.eqv ExcMask 0x007C 				#mask for exceptions, bits 2-6
+		.eqv WalkLight 0xFFFF0010		
+		.eqv DriveLight 0xFFFF0011			#Sets green for cars
+		.eqv TimerAdress 0xFFFF0012 			#Adress for Timer		
+		.eqv ButtonAdress 0xFFFF0013 			#I/O button address
+		.eqv WalkButton 0x01				#mask for pedestrian button
+		.eqv DriveButton 0x02				#mask for car button
+		.eqv EnableTimer 0x01				#mask for enabling timer
+		.eqv Dark 0x00 					#traffic lights
+		.eqv Stop 0x01 						#traffic lights (ped), bit 0
+		.eqv Walk 0x02 					#traffic lights (ped), bit 1
+		.eqv Red 0x01 					#traffic lights (car), bit 0
+		.eqv Yellow 0x02 				#traffic lights (car), bit 1
+		.eqv Green 0x04 				#traffic lights (car), bit 2
+		
+.data
+		timer: .word 0
+		LightTimer: .word 0
+		StrSpace: .asciiz " "
+		StrPed: .asciiz "Pedestrian\n"
+		StrNewLine: .asciiz "\n"
+	
+		
+								#Aktiverar och specificerar metoder som används för interupts	
+	.ktext 0x80000180
+	la	 $k0, InteruptCheck
+	jr	 $k0
+	nop
+.text
+.globl main
+main:
+	mfc0	 $t0, $12 						#prepare status register for button interrupt
+	ori 	 $t0, $t0, IntButton
+	ori 	 $t0, $t0, IntTime	
+	ori 	 $t0, $t0, 1
+	mtc0	 $t0, $12
+	
+	li 	$t0, EnableTimer					#enable the timer (t0 > 0)
+	sb 	$t0, TimerAdress
+
+	li	$t0,Green						#set green as standard for car
+	sb	$t0,DriveLight
+
+	li	$t0,Red						#set red as standard for pedestrian
+	sb	$t0,WalkLight
+WaitState: 							# WaitState, waiting for interrupts
+	nop
+	b 	WaitState
+	li 	$v0, 10 						#exit
+	syscall
+	.globl InteruptCheck
+InteruptCheck:
+
+	subu 	$sp,$sp,24
+	sw	$at, 8($sp) 					#save registers used (not k0, k1)
+	sw	$a0, 4($sp)
+	sw	$v0, 0($sp)
+
+	mfc0	$k1, $13 						#extract EXCCODE field from Cause register
+	andi 	$k0, $k1, ExcMask 					#extract EXCCODE (bits 2-6)
+	bne 	$k0, $zero, Restore					#Check if interupt is userbased
+	
+	lw	$a1,timer						#loads timer into a1
+	addi	$a1,$a1,1						#adds 1 to timer
+	sw	$a1,timer						#loads new timer value back into timer
+
+	move	$a0,$a1							#prints timer value
+	li 	$v0, 1			
+	syscall	
+	la	$a0,StrSpace
+	li	$v0,4
+	syscall
+	
+	
+							
+	andi	$k0, $k1, IntButton 					#extract bit 11 (button) from Cause register						
+	bne	$k0,$zero,Ped						#if there is buttoninterupt goto ped	
+	 	
+	b 	Restore		
+
+Ped:
+	li	$a0,0
+	lb	$k0,ButtonAdress
+	andi	$a0,$k0,WalkButton					#extracts EXCCode from bit 2-6
+	beq	$a0,$zero,Restore					#if there is no button interupt, goto restore
+	
+	la	$a0,StrPed						#prints out pedestrian in consol
+	li	$v0, 4
+	syscall
+	
+	lw	$a1,timer	
+	li	$t0,10
+	blt	$a1,$t0,Restore					#if timer is 10, goto Restore	
+	
+	b	State1						#Starts the cycle of lightswitches
+	
+State1:								#Blinking yellow lights - 3 units
+
+	lw 	$a1, LightTimer					#starts timeframe timer
+	li 	$t1, 3						#loads timeframe value
+	bgt	$a1,$t1,TimeReset1					#goto timereset if 3 units have past
+	
+	addi	$a1,$a1,1						#ads 1 to timer	
+
+	li	$t0, Yellow					#Blink yellow
+	sb	$t0, DriveLight
+
+	sw	$a1,LightTimer
+
+	b 	State1							#loop
+
+TimeReset1:							#Time reset and sets red for cars
+
+	li 	$t0, Red						#set carlight red
+	sb	$t0,DriveLight
+	
+	sw	$zero,LightTimer
+	
+	b	State2
+
+State2:								#Sets green light for pedestrian - 7 units
+
+	lw 	$a1,LightTimer
+	li 	$t1,7
+
+	bgt	$a1,$t1,TimeReset2					#goto TimeReset if >7
+	
+	addi	$a1,$a1,1						#add 1 to LightTimer
+	
+	li	$t0, Walk						#makes walklight green
+	sb	$t0,WalkLight
+	
+	sw	$a1,LightTimer
+	
+	b 	State2
+	
+
+TimeReset2:							#Time reset
+
+	sw 	$zero,LightTimer					#reset lighttimer
+	
+	b 	State3
+
+State3:								#Blinking redlight for pedestrian - 3 units
+
+	lw	$a1,LightTimer
+	li	$t1,3
+	
+	bgt	$a1,$t1,TimeReset3					#Goto TR3
+	
+	addi	$a1,$a1,1						#ads 1 to LightTimer
+	
+	
+	li	$t0,Dark						#set green for pedestrian
+	sb	$t0,WalkLight	
+	li	$t0,Red						#set green for pedestrian
+	sb	$t0,WalkLight
+	
+	sw	$a1,LightTimer	
+	
+	b 	State3
+
+TimeReset3:							#time reset and sets red light for pedestrian
+
+	li	$t0,Red						#Set red for pedestrian
+	sb	$t0,WalkLight
+	
+	sw	$zero,LightTimer					#reset LightTimer
+	sw	$zero,timer					#sets timer baqck to zero
+	b 	State4
+State4:								#sets yellow light for cars - 3 units
+
+	lw	$a1,LightTimer
+	li	$t1,3
+	
+	bgt	$a1,$t1,TimeReset4					#goto TR4
+	
+	addi	$a1,$a1,1						#add 1 to LightTimer
+	
+	li	$t0,Yellow						#set yellow for car
+	sb	$t0,DriveLight
+	
+	sw	$a1,LightTimer	
+	
+	b	State4
+
+TimeReset4:							#Time reset and turn green light for cars
+	li	$t0,Green
+	sb	$t0,DriveLight
+	
+	sw	$zero,LightTimer
+	
+	b Restore
+Restore: 
+	
+	lw 	$at, 8($sp)
+	lw 	$a0, 4($sp)
+	lw 	$v0, 0($sp)
+	addiu 	$sp, $sp,24
+	andi 	$k1, $k1, Clear					
+	mtc0 	$k1, $13 					#clear Cause
+	
+	eret 							#return using eret
